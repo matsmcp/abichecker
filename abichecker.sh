@@ -10,7 +10,7 @@
 readonly SCRIPT_NAME="$(basename $0|sed 's/\.sh//g')[$$]"
 
 # abuseipdb.com API token
-TOKEN=XXX
+TOKEN="XXX"
 
 # Api url
 API_URL="api.abuseipdb.com/api/v2/check"
@@ -27,6 +27,10 @@ ABUSE_SCORE=70
 # App configuration directory
 CONF_DIR="/opt"
 HOSTNAME_WHITELIST_DOMAINS="${CONF_DIR}/abichecker/hostname_domain_whitelist.txt"
+
+# Cache directory
+CACHE_DIR="/tmp/ramdisk"
+
 
 # Functions
 check_commands () {
@@ -80,15 +84,27 @@ if [ ! -z "${client_name}" ]; then
 	fi
 fi
 
-REPORT_JSON=$(curl -s -G https://${API_URL} --data-urlencode "ipAddress=$client_address" -H "Key: ${TOKEN}" -H "Accept: application/json")
+# check if in cache
+ABUSE_CONFIDENCE_SCORE=$(<$CACHE_DIR/$client_address)
+if [ -z "$ABUSE_CONFIDENCE_SCORE" ]; then
+	echo "$client_address not found in cache. " | logger -p mail.info -t ${SCRIPT_NAME}
 
-if [[ ! "${REPORT_JSON}" =~ "ipAddress" ]]; then
-	echo "Unable to fetch data from abuseipdb.com API. Please check connection." | logger -p mail.info -t ${SCRIPT_NAME}
-	exit 1
+	REPORT_JSON=$(curl -s -G https://${API_URL} --data-urlencode "ipAddress=$client_address" -H "Key: ${TOKEN}" -H "Accept: application/json")
+
+	if [[ ! "${REPORT_JSON}" =~ "ipAddress" ]]; then
+		echo "Unable to fetch data from abuseipdb.com API. Please check connection." | logger -p mail.info -t ${SCRIPT_NAME}
+		#exit 1
+		email_allow
+	fi
+
+	# Parsing JSON into variables
+	ABUSE_CONFIDENCE_SCORE=$(echo "${REPORT_JSON}"|jq -r .data.abuseConfidenceScore)
+
+	#add to cache
+	FILE="$CACHE_DIR/$client_address"
+	echo $ABUSE_CONFIDENCE_SCORE >$FILE
+
 fi
-
-# Parsing JSON into variables
-ABUSE_CONFIDENCE_SCORE=$(echo "${REPORT_JSON}"|jq -r .data.abuseConfidenceScore)
 
 if [ "${ABUSE_CONFIDENCE_SCORE}" -gt "${ABUSE_SCORE}" ]; then
 	# We are denying access
